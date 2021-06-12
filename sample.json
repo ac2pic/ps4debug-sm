@@ -1,0 +1,19 @@
+{
+    "ABC": [{
+        "type": "cmd",
+        "cond": "blah",
+        "children:": [{
+            "type": "out",
+            "data": "blah2",
+            "children": [{
+
+            }]
+        },{
+            "type": "in",
+            "data": "blah3",
+            "children": [{
+
+            }]
+        }]
+    }]
+}
