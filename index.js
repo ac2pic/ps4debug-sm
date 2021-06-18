@@ -4,12 +4,25 @@ const fs = require('fs');
 const CMD = {
     // Debug only
     [0x01FF0001]: {
-        name: "CMD_CHANGE_REPLAY_FILE",
+        name: "CMD_PUSH_REPLAY_FILE",
         run: function(_, cmdArg, {replay}) {
-            const filePath = cmdArg.toString('utf8');
-            replay.loadReplayFile(filePath);
+            const filePath = cmdArg.subarray(0, 32).toString('ascii').trim();
+            const index = cmdArg.readUInt32LE(32);
+            replay.pushReplayFile(filePath, index);
+            socket.write(hexToBuffer('00000080'));
         }
     },
+    [0x01FF0002]: {
+        name: "CMD_POP_REPLAY_FILE",
+        run: function(socket, _, {replay}) {
+            if (replay.popReplayFile()) {
+                socket.write(hexToBuffer('00000080'));
+            } else {
+                socket.write(hexToBuffer('010000F0'));
+            }
+        }
+    },
+    // regular
     [0xBDAA0001]: {
         name: "CMD_PROC_LIST",
         run: function(socket, _, {replay}) {
@@ -179,34 +192,39 @@ const cacheReplayFiles = {
 };
 
 function Replay() {
-    let cmdList = null;
+    let replayStack = [];
+    let currentReplay = null;
+    let index = 0;
+    
 
-
-    function loadReplayFile(filePath) {
-        if (!cacheReplayFiles[filePath]) {
-            const lines = fs.readFileSync(filePath, 'utf8').split('\n').map(e => e.trim());
-            cacheReplayFiles[filePath] = createReplayList(lines);
+    function getCurrentItem() {
+        if (currentReplay == null) {
+            throw 'currentReplay is null!';
         }
-        cmdList = cacheReplayFiles[filePath];
+        const {arr, index} = currentReplay;
+        return arr[index];
+
     }
 
-    let index = 0;
+    function increaseIndex() {
+        currentReplay.index++;
+    }
     function reset() {
         index = 0;
     }
 
     function matchOut() {
-        const out = cmdList[index];
+        const out = getCurrentItem();
         if (out.type !== 'out') {
             throw Error(`Expected <out> but got <${out.type}>.`);
         }
-        index++;
+        increaseIndex();
         return out;
     }
 
     function matchIn(buffer) {
         let data = bufferToHex(buffer);
-        const ins = cmdList[index];
+        const ins = getCurrentItem();
         if (ins.type !== 'in') {
             throw Error(`Expected <in> but got <${ins.type}>.`);
         }
@@ -214,13 +232,13 @@ function Replay() {
         if (ins.data !== data) {
             throw Error(`${ins.data} does not match ${data}.`);
         }
-        index++;
+        increaseIndex();
         return ins;
     }
 
 
     function matchCommand(buffer) {
-        const cmd = cmdList[index];
+        const cmd = getCurrentItem();
         if (cmd.type !== 'cmd') {
             throw Error(`Expected <cmd> but got <${cmd.type}>.`);
         }
@@ -237,16 +255,42 @@ function Replay() {
             throw Error(`${argLength} does not match ${cmd.argLength}.`);
         }
 
-        index++;
+        increaseIndex();
         return cmd;
     }
 
+    function pushReplayFile(filePath, newIndex) {
+        if (!cacheReplayFiles[filePath]) {
+            const lines = fs.readFileSync(filePath, 'utf8').split('\n').map(e => e.trim());
+            cacheReplayFiles[filePath] = createReplayList(lines);
+        }
+        currentReplay =  {
+            arr: cacheReplayFiles[filePath],
+            index: newIndex
+        };
+        replayStack.push(currentReplay);
+    }
+
+    function popReplayFile() {
+        let success = false;
+        if (replayStack.length > 1) {
+            replayStack.pop();
+            currentReplay = replayStack[replayStack.length - 1];
+            success = true;
+        }
+
+        return success;
+    }
+
+
     return {
-        loadReplayFile,
+        pushReplayFile,
+        popReplayFile,
         matchCommand,
         matchIn,
         matchOut,
         reset,
+        index,
     };
 }
 
@@ -281,15 +325,13 @@ const PACKET_MAGIC = 0xFFAABBCC;
 const server = net.createServer((socket) => {
     console.log('New socket connection!');
     const replay = Replay();
-    replay.loadReplayFile('output_install.txt');
-    
     async function execCmd(cmd, bufferArgs, helper) {
         console.log('Executing ', cmd.name);
         if (!helper.isDebug) {
             const out = replay.matchOut();
             socket.write(hexToBuffer(out.data));
         }
-        await cmd.run(socket, bufferArgs, helper);
+        await cmd.run(socket, bufferArgs, helper);        
     }
     const data = [];
 
@@ -297,6 +339,13 @@ const server = net.createServer((socket) => {
         data.push(...buffer);
     }
 
+    function closeConnection() {
+        clearTimeout(readTimeoutId);
+        clearTimeout(cmdLoopTimeoutId);
+        socket.close();
+    }
+
+    let readTimeoutId = -1;
     async function read(byteLength) {
         return new Promise((resolve, _) => {
             const checkData = () => {
@@ -304,15 +353,13 @@ const server = net.createServer((socket) => {
                     const dataSlice = data.splice(0, byteLength);
                     resolve(Buffer.from(dataSlice));
                 } else {
-                    setTimeout(checkData); 
+                    readTimeoutId = setTimeout(checkData); 
                 }
             };
-            setTimeout(checkData);
+            readTimeoutId = setTimeout(checkData);
         });
     }
 
-    // not going to work since buffer
-    // can be more or less than what we expect
     socket.on('data', onData);
 
     async function checkForCmd() {
@@ -348,15 +395,18 @@ const server = net.createServer((socket) => {
         await execCmd(cmd, cmdArg, {isDebug, read, replay});
     }
 
+    let cmdLoopTimeoutId = -1;
+
     const cmdLoop = async () => {
         try {
             await checkForCmd();
         } catch (e) {
             console.log(e);
+            closeConnection();
         }
-        setTimeout(cmdLoop); 
+        cmdLoopTimeoutId = setTimeout(cmdLoop); 
     };
-    setTimeout(cmdLoop);
+    cmdLoopTimeoutId = setTimeout(cmdLoop);
 
 
 }).on('error', (err) => {
