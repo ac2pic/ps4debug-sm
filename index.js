@@ -1,20 +1,28 @@
 const net = require('net');
 const fs = require('fs');
 
+
+function bufferToString(buffer, encoding) {
+    return buffer.subarray(0, buffer.indexOf(0)).toString(encoding);
+}
+
 const CMD = {
     // Debug only
     [0x01FF0001]: {
         name: "CMD_PUSH_REPLAY_FILE",
-        run: function(_, cmdArg, {replay}) {
-            const filePath = cmdArg.subarray(0, 32).toString('ascii').trim();
+        run: function(socket, cmdArg, {replay}) {
+            socket.write(hexToBuffer('00000080'));
+            const filePath = bufferToString(cmdArg.subarray(0, 32), 'ascii');
             const index = cmdArg.readUInt32LE(32);
             replay.pushReplayFile(filePath, index);
             socket.write(hexToBuffer('00000080'));
+            console.log('Done pushing!');
         }
     },
     [0x01FF0002]: {
         name: "CMD_POP_REPLAY_FILE",
         run: function(socket, _, {replay}) {
+            socket.write(hexToBuffer('00000080'));
             if (replay.popReplayFile()) {
                 socket.write(hexToBuffer('00000080'));
             } else {
@@ -260,15 +268,20 @@ function Replay() {
     }
 
     function pushReplayFile(filePath, newIndex) {
+        let replayArr = cacheReplayFiles[filePath];
         if (!cacheReplayFiles[filePath]) {
             const lines = fs.readFileSync(filePath, 'utf8').split('\n').map(e => e.trim());
-            cacheReplayFiles[filePath] = createReplayList(lines);
+            replayArr = cacheReplayFiles[filePath] = createReplayList(lines);
         }
-        currentReplay =  {
-            arr: cacheReplayFiles[filePath],
-            index: newIndex
-        };
-        replayStack.push(currentReplay);
+        if (currentReplay && currentReplay.arr == replayArr) {
+            currentReplay.index = newIndex;
+        } else {
+            currentReplay =  {
+                arr: replayArr,
+                index: newIndex
+            };
+            replayStack.push(currentReplay);
+        }
     }
 
     function popReplayFile() {
@@ -326,7 +339,6 @@ const server = net.createServer((socket) => {
     console.log('New socket connection!');
     const replay = Replay();
     async function execCmd(cmd, bufferArgs, helper) {
-        console.log('Executing ', cmd.name);
         if (!helper.isDebug) {
             const out = replay.matchOut();
             socket.write(hexToBuffer(out.data));
@@ -375,6 +387,7 @@ const server = net.createServer((socket) => {
             sendStatus(socket, CMD_ERROR);
             return; 
         }
+        console.log('CMD ', cmd.name);
         let isDebug = (cmdNumber & 0x7fFF0000) == 0x1ff0000;
 
         const cmdArgLength = cmdPacket.readUInt32LE(8);
