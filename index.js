@@ -143,10 +143,14 @@ function parseReplayLine(line) {
 
 function processLines(lines) {
     const processed = [];
-    let lineIndex = 0;
     for (let line of lines) {
-        lineIndex++;
-        
+        let numberMatch = line.match(/^(\d+):/); 
+        if (!numberMatch) {
+            continue;
+
+        }
+        line = line.substring(numberMatch[0].length);
+        const lineIndex = Number(numberMatch[1]);
         if (!line.startsWith('(')) {
             continue;
         }
@@ -202,9 +206,6 @@ const cacheReplayFiles = {
 function Replay() {
     let replayStack = [];
     let currentReplay = null;
-    let index = 0;
-    
-
     function getCurrentItem() {
         if (currentReplay == null) {
             throw 'currentReplay is null!';
@@ -218,13 +219,13 @@ function Replay() {
         currentReplay.index++;
     }
     function reset() {
-        index = 0;
+        currentReplay.index = 0;
     }
 
     function matchOut() {
         const out = getCurrentItem();
         if (out.type !== 'out') {
-            throw Error(`Expected <out> but got <${out.type}>.`);
+            throw Error(`At @${currentReplay.index}: Expected <out> but got <${out.type}>.`);
         }
         increaseIndex();
         return out;
@@ -234,11 +235,11 @@ function Replay() {
         let data = bufferToHex(buffer);
         const ins = getCurrentItem();
         if (ins.type !== 'in') {
-            throw Error(`Expected <in> but got <${ins.type}>.`);
+            throw Error(`At @${currentReplay.index}: Expected <in> but got <${ins.type}>.`);
         }
 
         if (ins.data !== data) {
-            throw Error(`${ins.data} does not match ${data}.`);
+            throw Error(`At @${currentReplay.index}: ${ins.data} does not match ${data}.`);
         }
         increaseIndex();
         return ins;
@@ -248,19 +249,19 @@ function Replay() {
     function matchCommand(buffer) {
         const cmd = getCurrentItem();
         if (cmd.type !== 'cmd') {
-            throw Error(`Expected <cmd> but got <${cmd.type}>.`);
+            throw Error(`At @${currentReplay.index}: Expected <cmd> but got <${cmd.type}>.`);
         }
 
         const name = bufferToHex(buffer.subarray(0, 4));
         const argLength = bufferToHex(buffer.subarray(4));
 
         if (cmd.name !== name) {
-            throw Error(`${name} does not match ${cmd.name}.`);
+            throw Error(`At @${currentReplay.index}: ${name} does not match ${cmd.name}.`);
         }
 
 
         if (cmd.argLength !== argLength) {
-            throw Error(`${argLength} does not match ${cmd.argLength}.`);
+            throw Error(`At @${currentReplay.index}: ${argLength} does not match ${cmd.argLength}.`);
         }
 
         increaseIndex();
@@ -303,7 +304,6 @@ function Replay() {
         matchIn,
         matchOut,
         reset,
-        index,
     };
 }
 
