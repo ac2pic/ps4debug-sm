@@ -80,7 +80,7 @@ const CMD = {
             // const pid = argBuffer.readUInt32LE(0);
             // send start thingy
             // send start
-            out = replay.matchOut();
+            let out = replay.matchOut();
             socket.write(hexToBuffer(out.data));  
         }
     },
@@ -354,7 +354,7 @@ const server = net.createServer((socket) => {
     function closeConnection() {
         clearTimeout(readTimeoutId);
         clearTimeout(cmdLoopTimeoutId);
-        socket.close();
+        socket.end();
     }
 
     let readTimeoutId = -1;
@@ -365,15 +365,14 @@ const server = net.createServer((socket) => {
                     const dataSlice = data.splice(0, byteLength);
                     resolve(Buffer.from(dataSlice));
                 } else {
-                    readTimeoutId = setTimeout(checkData); 
+                    readTimeoutId = setImmediate(checkData); 
                 }
             };
-            readTimeoutId = setTimeout(checkData);
+            readTimeoutId = setImmediate(checkData);
         });
     }
 
     socket.on('data', onData);
-
     async function checkForCmd() {
         const cmdPacket = await read(12);
         if (cmdPacket.readUInt32LE(0) != PACKET_MAGIC) {
@@ -417,9 +416,9 @@ const server = net.createServer((socket) => {
             console.log(e);
             closeConnection();
         }
-        cmdLoopTimeoutId = setTimeout(cmdLoop); 
+        cmdLoopTimeoutId = setImmediate(cmdLoop); 
     };
-    cmdLoopTimeoutId = setTimeout(cmdLoop);
+    cmdLoopTimeoutId = setImmediate(cmdLoop);
 
 
 }).on('error', (err) => {
