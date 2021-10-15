@@ -13,7 +13,7 @@ function hexToBuffer(hex) {
     return buffer;
 }
 
-const lines = fs.readFileSync('ps4debug_1.1.13.txt', 'utf8').split('\n')
+const lines = fs.readFileSync('output_abc.txt', 'utf8').split('\n')
                     .map(e => e.trim())
                     .map((line) => {
                         const [_type, msg] = line.split(" ");
@@ -25,27 +25,79 @@ const lines = fs.readFileSync('ps4debug_1.1.13.txt', 'utf8').split('\n')
                     });
 const server = net.createServer((socket) => {
     console.log('New socket connection!');
+    const data = [];
+
+    function onData(buffer) {
+        data.push(...buffer);
+    }
+
+    function closeConnection() {
+        clearTimeout(readTimeoutId);
+        clearTimeout(cmdLoopTimeoutId);
+        socket.end();
+    }
+
+    let readTimeoutId = -1;
+    async function read(byteLength) {
+        return new Promise((resolve, reject) => {
+            const checkData = () => {
+                if (socket.destroyed) {
+                    reject();
+                }
+
+                if (data.length >= byteLength) {
+                    const dataSlice = data.splice(0, byteLength);
+                    resolve(Buffer.from(dataSlice));
+                } else {
+                    readTimeoutId = setImmediate(checkData); 
+                }
+            };
+            readTimeoutId = setImmediate(checkData);
+        });
+    }
+
+    socket.on('data', onData);
+    
     let lineIndex = 0;
-    let inMatched = 0;
-    socket.on('data', function(buffer) {
-        const line = lines[lineIndex];
+
+    async function socketLoop() {
+        let line = lines[lineIndex];
+        if (line == null) {
+            closeConnection();
+            return;
+        }
+
         if (line.type === 'in') {
-            if (inMatched < line.buffer.length) {
-                for(let i = 0; i < line.buffer.length; i++) {
-                    if (buffer[i] != line.buffer[inMatched + i]) {
-                        console.error(`Mismatch at ${lineIndex + 1}:${inMatched + i + 4}`);
-                        socket.close();
-                    }
+            const bufferLength = line.buffer.length;
+            const sentBuffer = await read(bufferLength);
+            for (let i = 0; i < bufferLength; i++) {
+                if (sentBuffer[i] !== line.buffer[i]) {
+                    throw `Invalid buffer [${lineIndex + 1}@${i + 4}]`;
                 }
             }
-            if (inMatched === line.buffer.length) {
-                inMatched = 0;
-                lineIndex++;
-                socket.write(line.buffer);
-                lineIndex++;
-            }
+            lineIndex++;
+            line = lines[lineIndex];
+        } 
+        while (line.type === 'out') {
+            socket.write(line.buffer);
+            lineIndex++;
+            line = lines[lineIndex];
         }
-    });
+        
+    }
+
+    const cmdLoop = async () => {
+        try {
+            await socketLoop();
+        } catch (e) {
+            console.log(e);
+            closeConnection();
+            return;
+        }
+        cmdLoopTimeoutId = setImmediate(cmdLoop); 
+    };
+    cmdLoopTimeoutId = setImmediate(cmdLoop);
+
 }).on('error', (err) => {
     // Handle errors here.
     // throw err;
