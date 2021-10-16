@@ -6,6 +6,20 @@ function bufferToString(buffer, encoding) {
     return buffer.subarray(0, buffer.indexOf(0)).toString(encoding);
 }
 
+function matchUntilIn(socket, replay) {
+    do {
+        let current = replay.peek(0);
+        if (!current || current.type !== 'out') {
+            break;
+        }
+        current = replay.matchOut();
+        if (current && current.type === 'out') {
+            socket.write(hexToBuffer(current.data));
+        }
+    } while (true);
+}
+
+
 const CMD = {
     // Debug only
     [0x01FF0001]: {
@@ -30,80 +44,84 @@ const CMD = {
             }
         }
     },
+    [0xBD000500]: {
+        name: "CMD_FW_VERSION",
+        run: function(socket, _, {replay}) {
+            matchUntilIn(socket, replay);
+        }
+    },
+    [0xBD000501]: {
+        name: "CMD_PS4DEBUG_EXT_VERSION",
+        run: function(socket, _, {replay}) {
+            matchUntilIn(socket, replay);
+        }
+    },
+    [0xBD000001]: {
+        name: "CMD_PS4DEBUG_BASE_VERSION",
+        run: function(socket, _, {replay}) {
+            replay.matchOut();
+            socket.write(hexToBuffer('03000000'));
+            replay.matchOut();
+            socket.write(hexToBuffer('312E33'));
+        }
+    },
     // regular
     [0xBDAA0001]: {
         name: "CMD_PROC_LIST",
         run: function(socket, _, {replay}) {
-            // send count
-            let out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
-            
-            // send out data
-            out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
+            matchUntilIn(socket, replay);
         }
     },
     [0xBDAA0002]: {
         name: "CMD_PROC_READ",
         run: async function (socket, _, {replay}) {
-            const out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
+            matchUntilIn(socket, replay);
         }
     },
     [0xBDAA0003]: {
         name: "CMD_PROC_WRITE",
         run: async function (socket, argBuffer, {read,replay}) {
+            matchUntilIn(socket, replay);
+
             const length = argBuffer.readUInt32LE(12);
             const cmdWrite = await read(length);
             replay.matchIn(cmdWrite);
-            const out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
+            matchUntilIn(socket, replay);
         }
     },
     [0xBDAA0004]: {
         name: "CMD_PROC_MAPS",
         run: function(socket, argBuffer, {self, replay}) {
-            const callKey = bufferToHex(argBuffer);
-
-            // send count
-            let out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
-
-            // send data
-            out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
+            matchUntilIn(socket, replay);
         }
     },
     [0xBDAA0005]: {
         name: "CMD_PROC_INSTALL",
         run: function(socket, argBuffer, {replay}) {
-            // const pid = argBuffer.readUInt32LE(0);
-            // send start thingy
-            // send start
-            let out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));  
+            matchUntilIn(socket, replay);
         }
     },
     [0xBDAA0006]: {
         name: "CMD_PROC_CALL",
         run: function(socket, _, {replay}) {
-            // send return code
             let out = replay.matchOut();
+            socket.write(hexToBuffer(out.data));
+
+            // send return code
+            out = replay.matchOut();
             socket.write(hexToBuffer(out.data));
         }
     },
     [0xBDAA000B]: { 
         name: "CMD_PROC_ALLOC",
         run: function(socket, argBuffer, {replay}) {
-            const callKey = bufferToHex(argBuffer);
-            let out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
+            matchUntilIn(socket, replay);
         }
     },
     [0xBDAA000C]: {
         name: "CMD_PROC_FREE",
-        run: function(socket, argBuffer) {
-            // doesn't need to do anything
+        run: function(socket, argBuffer, {replay}) {
+            matchUntilIn(socket, replay);
         }
     },
 };
@@ -143,14 +161,13 @@ function parseReplayLine(line) {
 
 function processLines(lines) {
     const processed = [];
+    let lineIndex = 0;
     for (let line of lines) {
         let numberMatch = line.match(/^(\d+):/); 
         if (!numberMatch) {
             continue;
-
         }
         line = line.substring(numberMatch[0].length);
-        const lineIndex = Number(numberMatch[1]);
         if (!line.startsWith('(')) {
             continue;
         }
@@ -166,6 +183,7 @@ function processLines(lines) {
             throw Error(`${lineIndex}@${e.char}: ${e.message}`); 
         }
         processed.push(replayValue);
+        lineIndex++;
     }
     return processed;
 }
@@ -215,6 +233,10 @@ function Replay() {
 
     }
 
+    function peek(offset) {
+        const {arr, index} = currentReplay;
+        return arr[index + offset];
+    }
     function increaseIndex() {
         currentReplay.index++;
     }
@@ -304,6 +326,7 @@ function Replay() {
         matchIn,
         matchOut,
         reset,
+        peek,
     };
 }
 
@@ -338,13 +361,8 @@ const PACKET_MAGIC = 0xFFAABBCC;
 const server = net.createServer((socket) => {
     console.log('New socket connection!');
     const replay = Replay();
-    async function execCmd(cmd, bufferArgs, helper) {
-        if (!helper.isDebug) {
-            const out = replay.matchOut();
-            socket.write(hexToBuffer(out.data));
-        }
-        await cmd.run(socket, bufferArgs, helper);        
-    }
+    replay.pushReplayFile('out_123.txt', 0);
+
     const data = [];
 
     function onData(buffer) {
@@ -403,8 +421,7 @@ const server = net.createServer((socket) => {
         if (!isDebug && cmdArg) {
             replay.matchIn(cmdArg);
         }
-
-        await execCmd(cmd, cmdArg, {isDebug, read, replay});
+        await cmd.run(socket, cmdArg, {isDebug, read, replay});
     }
 
     let cmdLoopTimeoutId = -1;
