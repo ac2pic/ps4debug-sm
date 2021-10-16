@@ -18,6 +18,15 @@ with open('dbg_v13_ws.c', 'r') as wsFile:
             codeIndex += 1
         else:
             code[codeIndex] += findBytes(line)
-        
-with open('output_abc.txt', 'w') as out:
+for codeIndex in range(len(code)):
+    codeLine = code[codeIndex]
+    [typeId, hexValue] = codeLine.split(" ")
+    if codeLine.startswith("in"):
+        if hexValue.startswith("CCBBAAFF"):
+            code[codeIndex] = "{}:(cmd 0x{} 0x{})".format(codeIndex, hexValue[8:16], hexValue[16::])
+            continue
+    code[codeIndex] = "{}:({} 0x{})".format(codeIndex, typeId, hexValue)
+
+
+with open('out_123.txt', 'w') as out:
     out.write('\n'.join(code))
