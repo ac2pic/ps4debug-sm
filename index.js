@@ -6,7 +6,7 @@ function bufferToString(buffer, encoding) {
     return buffer.subarray(0, buffer.indexOf(0)).toString(encoding);
 }
 
-function matchUntilIn(socket, replay) {
+function matchOuts(socket, replay) {
     do {
         let current = replay.peek(0);
         if (!current || current.type !== 'out') {
@@ -47,13 +47,13 @@ const CMD = {
     [0xBD000500]: {
         name: "CMD_FW_VERSION",
         run: function(socket, _, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBD000501]: {
         name: "CMD_PS4DEBUG_EXT_VERSION",
         run: function(socket, _, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBD000001]: {
@@ -69,36 +69,36 @@ const CMD = {
     [0xBDAA0001]: {
         name: "CMD_PROC_LIST",
         run: function(socket, _, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBDAA0002]: {
         name: "CMD_PROC_READ",
         run: async function (socket, _, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBDAA0003]: {
         name: "CMD_PROC_WRITE",
         run: async function (socket, argBuffer, {read,replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
 
             const length = argBuffer.readUInt32LE(12);
             const cmdWrite = await read(length);
             replay.matchIn(cmdWrite);
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBDAA0004]: {
         name: "CMD_PROC_MAPS",
         run: function(socket, argBuffer, {self, replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBDAA0005]: {
         name: "CMD_PROC_INSTALL",
         run: function(socket, argBuffer, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBDAA0006]: {
@@ -115,13 +115,13 @@ const CMD = {
     [0xBDAA000B]: { 
         name: "CMD_PROC_ALLOC",
         run: function(socket, argBuffer, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
     [0xBDAA000C]: {
         name: "CMD_PROC_FREE",
         run: function(socket, argBuffer, {replay}) {
-            matchUntilIn(socket, replay);
+            matchOuts(socket, replay);
         }
     },
 };
