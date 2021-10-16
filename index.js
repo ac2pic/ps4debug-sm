@@ -44,6 +44,7 @@ const CMD = {
             }
         }
     },
+    // extended
     [0xBD000500]: {
         name: "CMD_FW_VERSION",
         run: function(socket, _, {replay}) {
@@ -59,10 +60,7 @@ const CMD = {
     [0xBD000001]: {
         name: "CMD_PS4DEBUG_BASE_VERSION",
         run: function(socket, _, {replay}) {
-            replay.matchOut();
-            socket.write(hexToBuffer('03000000'));
-            replay.matchOut();
-            socket.write(hexToBuffer('312E33'));
+            matchOuts(socket, replay);
         }
     },
     // regular
@@ -86,6 +84,7 @@ const CMD = {
             const length = argBuffer.readUInt32LE(12);
             const cmdWrite = await read(length);
             replay.matchIn(cmdWrite);
+            
             matchOuts(socket, replay);
         }
     },
@@ -163,6 +162,15 @@ function processLines(lines) {
     const processed = [];
     let lineIndex = 0;
     for (let line of lines) {
+        if (line.startsWith('#')) {
+            processed.push({
+                type: 'label',
+                name: line.substring(1).trim(),
+                index: lineIndex + 1
+            });
+            continue;
+        }
+
         let numberMatch = line.match(/^(\d+):/); 
         if (!numberMatch) {
             continue;
@@ -182,6 +190,7 @@ function processLines(lines) {
         } catch (e) {
             throw Error(`${lineIndex}@${e.char}: ${e.message}`); 
         }
+        replayValue.lineNumber = lineIndex;
         processed.push(replayValue);
         lineIndex++;
     }
@@ -196,12 +205,18 @@ function createReplayList(lines) {
     for (const prosLine of prosLines) {
         const line = {
             type: prosLine.type,
+            lineNumber: prosLine.lineNumber
         };
         list.push(line);
         switch(prosLine.type) {
             case 'cmd': {
                 line.name = prosLine.args[0];
                 line.argLength = prosLine.args[1];
+                break;
+            }
+            case 'label': {
+                line.name = prosLine.name;
+                line.index = prosLine.index;
                 break;
             }
             case 'in':
@@ -224,17 +239,32 @@ const cacheReplayFiles = {
 function Replay() {
     let replayStack = [];
     let currentReplay = null;
+    function getIndex() {
+        return currentReplay == null ? -1 : currentReplay.index;
+    }
+
     function getCurrentItem() {
         if (currentReplay == null) {
             throw 'currentReplay is null!';
         }
-        const {arr, index} = currentReplay;
+        let {arr, index} = currentReplay;
+        do {
+            if (!arr[index] || arr[index].type !== 'label') {
+                break;
+            }
+            increaseIndex();
+            index = currentReplay.index;
+        } while (true);
+
         return arr[index];
 
     }
 
     function peek(offset) {
         const {arr, index} = currentReplay;
+        while (arr[index + offset] && arr[index + offset].type === 'label') {
+            offset++;
+        }
         return arr[index + offset];
     }
     function increaseIndex() {
@@ -257,11 +287,11 @@ function Replay() {
         let data = bufferToHex(buffer);
         const ins = getCurrentItem();
         if (ins.type !== 'in') {
-            throw Error(`At @${currentReplay.index}: Expected <in> but got <${ins.type}>.`);
+            throw Error(`At @${ins.lineNumber}: Expected <in> but got <${ins.type}>.`);
         }
 
         if (ins.data !== data) {
-            throw Error(`At @${currentReplay.index}: ${ins.data} does not match ${data}.`);
+            throw Error(`At @${ins.lineNumber}: ${ins.data} does not match ${data}.`);
         }
         increaseIndex();
         return ins;
@@ -271,19 +301,19 @@ function Replay() {
     function matchCommand(buffer) {
         const cmd = getCurrentItem();
         if (cmd.type !== 'cmd') {
-            throw Error(`At @${currentReplay.index}: Expected <cmd> but got <${cmd.type}>.`);
+            throw Error(`At @${cmd.lineNumber}: Expected <cmd> but got <${cmd.type}>.`);
         }
 
         const name = bufferToHex(buffer.subarray(0, 4));
         const argLength = bufferToHex(buffer.subarray(4));
 
         if (cmd.name !== name) {
-            throw Error(`At @${currentReplay.index}: ${name} does not match ${cmd.name}.`);
+            throw Error(`At @${cmd.lineNumber}: ${name} does not match ${cmd.name}.`);
         }
 
 
         if (cmd.argLength !== argLength) {
-            throw Error(`At @${currentReplay.index}: ${argLength} does not match ${cmd.argLength}.`);
+            throw Error(`At @${cmd.lineNumber}: ${argLength} does not match ${cmd.argLength}.`);
         }
 
         increaseIndex();
@@ -292,7 +322,7 @@ function Replay() {
 
     function pushReplayFile(filePath, newIndex) {
         let replayArr = cacheReplayFiles[filePath];
-        if (!cacheReplayFiles[filePath]) {
+        if (true || !cacheReplayFiles[filePath]) {
             const lines = fs.readFileSync(filePath, 'utf8').split('\n').map(e => e.trim());
             replayArr = cacheReplayFiles[filePath] = createReplayList(lines);
         }
@@ -327,6 +357,7 @@ function Replay() {
         matchOut,
         reset,
         peek,
+        getIndex,
     };
 }
 
@@ -361,7 +392,7 @@ const PACKET_MAGIC = 0xFFAABBCC;
 const server = net.createServer((socket) => {
     console.log('New socket connection!');
     const replay = Replay();
-    replay.pushReplayFile('out_123.txt', 0);
+    replay.pushReplayFile('out_505.txt', 0);
 
     const data = [];
 
@@ -394,17 +425,18 @@ const server = net.createServer((socket) => {
     async function checkForCmd() {
         const cmdPacket = await read(12);
         if (cmdPacket.readUInt32LE(0) != PACKET_MAGIC) {
-            sendStatus(socket, CMD_ERROR);
+            socket.write(hexToBuffer('010000F0'));
+            return;
         }
 
         const cmdNumber = cmdPacket.readUInt32LE(4);
         const cmd = CMD[cmdNumber];
         if (!cmd) {
             console.log('Trying to execute', cmdNumber.toString(16));
-            sendStatus(socket, CMD_ERROR);
+            socket.write(hexToBuffer('010000F0'));
             return; 
         }
-        console.log('CMD ', cmd.name);
+        console.log(`CMD ${cmd.name} at index ${replay.peek(0).lineNumber}`);
         let isDebug = (cmdNumber & 0x7fFF0000) == 0x1ff0000;
 
         const cmdArgLength = cmdPacket.readUInt32LE(8);
@@ -453,6 +485,5 @@ process.on('uncaughtException',function(err){
     } else {
         console.log('something terrible happened..');
         console.log(err);
-        process.exit(-1);
     }
 });
