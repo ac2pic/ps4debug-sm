@@ -13,7 +13,11 @@ function hexToBuffer(hex) {
     return buffer;
 }
 
-const lines = fs.readFileSync('output_abc.txt', 'utf8').split('\n')
+function bufferToHex(buffer) {
+    return Array.from(buffer).map(e => e.toString(16).padStart(2, '0').toUpperCase()).join('');
+}
+
+const lines = fs.readFileSync('out_900.txt', 'utf8').split('\n')
                     .map(e => e.trim())
                     .map((line) => {
                         const [_type, msg] = line.split(" ");
@@ -78,11 +82,12 @@ const server = net.createServer((socket) => {
             lineIndex++;
             line = lines[lineIndex];
         } 
-        while (line.type === 'out') {
+        while (line != null && line.type === 'out') {
             socket.write(line.buffer);
             lineIndex++;
             line = lines[lineIndex];
         }
+        
         
     }
 

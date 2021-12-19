@@ -392,8 +392,8 @@ const PACKET_MAGIC = 0xFFAABBCC;
 const server = net.createServer((socket) => {
     console.log('New socket connection!');
     const replay = Replay();
-    replay.pushReplayFile('out_505.txt', 0);
-
+    // replay.pushReplayFile('out_505.txt', 0);
+	replay.pushReplayFile('out_900.txt', 0);
     const data = [];
 
     function onData(buffer) {
